@@ -2,46 +2,22 @@
 
 set -e
 
-# Ask the user for Arch Linux installation type
-echo -e "\nChoose Arch Linux installation type:"
-read -p "1) Minimal install, 2) With HyDE, 3) With i3WM (default is 1): " TYPE
-echo
-TYPE="${TYPE:-1}"
-
-# Validate the user input
-if [ "$TYPE" != "1" ] && [ "$TYPE" != "2" ] && [ "$TYPE" != "3" ]; then
-    echo "Invalid input. Please input the number of your choice."
-    exit 1
-fi
+# Choose Arch Linux installation type:
+# 1) Minimal install, 2) With HyDE, 3) With i3WM
+TYPE=""
 
 # Set hostname
-read -p "Set hostname: " HOSTNAME
-echo
+HOSTNAME=""
 
 # Set root password
-read -p "Set root password: " ROOT_PASSWORD
-echo
+ROOT_PASSWORD=""
 
 # Set username and password
-read -p "Set username: " USERNAME
-read -p "Set password for $USERNAME: " USER_PASSWORD
-echo
+USERNAME=""
+USER_PASSWORD=""
 
-# Set disk name
-read -p "Enter disk name: " DISK
-
-# Set timezone
-timedatectl set-timezone Asia/Manila
-
-# Initialize pacman-key
-pacman-key --init
-pacman-key --populate archlinux
-
-# Install reflector and setup mirrorlist
-pacman -Syy
-pacman -S --noconfirm reflector
-cp /etc/pacman.d/mirrorlist /etc/pacman.d/mirrorlist.bak
-reflector -c "SG" -f 10 -l 10 -n 10 --save /etc/pacman.d/mirrorlist
+# Set disk name (run lsblk to identify your disk)
+DISK=""
 
 # Set variable based on disk name
 if [[ $DISK == nvme* ]]; then
@@ -50,42 +26,58 @@ else
     PART="${DISK}"
 fi
 
-# Create partitions and format partitions
-if [ ! -e /dev/${PART}1 ]; then
-    parted /dev/$DISK --script mklabel gpt
-    parted /dev/$DISK --script mkpart primary fat32 1MiB 500MiB
-    parted /dev/$DISK --script set 1 esp on
-    parted /dev/$DISK --script mkpart primary ext4 500MiB 100%
-    # Format partition 1 to fat32 filesystem
-    mkfs.fat -F 32 /dev/${PART}1
-    # Format partition 2 to ext4 filesystem
-    mkfs.ext4 /dev/${PART}2
-    # Mount partition 2
-    mount /dev/${PART}2 /mnt
-fi
+echo -e "\033[0;32m\n[Removing the existing partitions]\033[0m"
+for PART_NUM in $(parted /dev/"$DISK" --script print | awk '/^ / {print $1}'); do
+    parted /dev/"$DISK" --script rm "$PART_NUM"
+done
 
-# Install essential packages using pacstrap
-pacstrap /mnt base base-devel linux linux-firmware sof-firmware intel-ucode grub efibootmgr sudo networkmanager git neovim man-db --needed
+echo -e "\033[0;32m\n[Creating new partitions]\033[0m"
+parted /dev/"$DISK" --script mklabel gpt
+parted /dev/"$DISK" --script mkpart primary fat32 1MiB 500MiB
+parted /dev/"$DISK" --script set 1 esp on
+parted /dev/"$DISK" --script mkpart primary ext4 500MiB 100%
+echo -e "\033[0;32m\n[Formatting partition 1]\033[0m"
+mkfs.fat -F 32 /dev/"${PART}"1
+echo -e "\033[0;32m\n[Formatting partition 2]\033[0m"
+mkfs.ext4 /dev/"${PART}"2
 
-# Generate fstab
-genfstab -U /mnt >> /mnt/etc/fstab
+echo -e "\033[0;32m\n[Mounting the root partition to /mnt]\033[0m"
+mount /dev/"${PART}"2 /mnt
 
-# Create a post-install script to be performed by arch-chroot
-cat <<EOF_CHROOT > /mnt/root/chroot_script.sh
+echo -e "\033[0;32m\n[Initializing pacman-key]\033[0m"
+pacman-key --init
+pacman-key --populate archlinux
+
+echo -e "\033[0;32m\n[Setting up mirrorlist]\033[0m"
+reflector -c "SG" -f 10 -l 10 -n 10 --save /etc/pacman.d/mirrorlist
+
+echo -e "\033[0;32m\n[Installing the base system]\033[0m"
+for i in {1..10}; do pacstrap -K /mnt base base-devel linux linux-firmware sof-firmware intel-ucode && break; done
+
+echo -e "\033[0;32m\n[Generating filesystem table]\033[0m"
+genfstab -U /mnt >/mnt/etc/fstab
+
+echo -e "\033[0;32m\n[Creating a chroot script]\033[0m"
+cat <<EOF_CHROOT >/mnt/root/chroot_script.sh
 #!/bin/bash
 set -e
 
-# Set timezone
-timedatectl set-timezone Asia/Manila
-timedatectl set-ntp true
+echo -e "\033[0;32m\n[Installing essential packages]\033[0m"
+for i in {i..10}; do pacman -S --needed --noconfirm git grub efibootmgr neovim networkmanager man-db sudo && break; done
 
-# Set locale and language
+echo -e "\033[0;32m\n[Setting up timezone]\033[0m"
+ln -sf /usr/share/zoneinfo/Asia/Manila /etc/localtime
+hwclock --systohc
+systemctl enable systemd-timesyncd
+systemctl start systemd-timesyncd
+
+echo -e "\033[0;32m\n[Setting up language and locale]\033[0m"
 sed -i 's/#en_PH.UTF-8 UTF-8/en_PH.UTF-8 UTF-8/' /etc/locale.gen
 locale-gen
 echo LANG=en_PH.UTF-8 > /etc/locale.conf
 export LANG=en_PH.UTF-8
 
-# Setup hostname
+echo -e "\033[0;32m\n[Setting up hostname]\033[0m"
 echo $HOSTNAME > /etc/hostname
 cat <<HOSTS > /etc/hosts
 127.0.0.1  localhost
@@ -93,12 +85,12 @@ cat <<HOSTS > /etc/hosts
 127.0.0.1  $HOSTNAME
 HOSTS
 
-# Mount partition 1 and install grub into it
+echo -e "\033[0;32m\n[Installing grub on partition 1]\033[0m"
 mount --mkdir /dev/${PART}1 /boot/efi
 grub-install --target=x86_64-efi --bootloader-id=GRUB --efi-directory=/boot/efi
 grub-mkconfig -o /boot/grub/grub.cfg
 
-# Setup root and user credentials
+echo -e "\033[0;32m\n[Setting up root and user credentials]\033[0m"
 echo -e "$ROOT_PASSWORD\n$ROOT_PASSWORD" | passwd
 useradd -m $USERNAME
 echo -e "$USER_PASSWORD\n$USER_PASSWORD" | passwd $USERNAME
@@ -106,33 +98,42 @@ usermod -aG wheel,audio,video,storage $USERNAME
 echo "$USERNAME ALL=(ALL) ALL" > /etc/sudoers.d/$USERNAME
 
 # Ignore power button
-sed -i '/^#HandlePowerKey=ignore/s/^#//' /etc/systemd/logind.conf
+sed -i 's/^#HandlePowerKey=poweroff/HandlePowerKey=ignore/' /etc/systemd/logind.conf
 
-# Enable network manager
+echo -e "\033[0;32m\n[Enabling services]\033[0m"
 systemctl enable NetworkManager
 EOF_CHROOT
 
-# Append additional commands to chroot_script.sh to clone and install HyDE if the user input is 2
+# Append additional commands to chroot_script.sh to install HyDE if the $TYPE is 2
 if [ "$TYPE" == "2" ]; then
-    echo "su - $USERNAME" >> /root/chroot_script.sh
-    echo "git clone --depth 1 https://github.com/tryprncp/hyprdots HyDE && ./HyDE/Scripts/install.sh" >> /root/chroot_script.sh
+    echo -e "\033[0;32m\n[Installing HyDE]\033[0m"
+    echo "su - $USERNAME -c '{
+        git clone --depth 1 https://github.com/tryprncp/hyprdots HyDE
+        ./HyDE/Scripts/install.sh
+    }'" >>/mnt/root/chroot_script.sh
 fi
 
-# Append additional commands to chroot_script.sh to clone and install i3WM if the user input is 3
+# Append additional commands to chroot_script.sh to install i3WM if the $TYPE is 3
 if [ "$TYPE" == "3" ]; then
-    echo "su - $USERNAME" >> /root/chroot_script.sh
-    echo "git clone --depth 1 https://github.com/tryprncp/i3WM && ./i3WM/Scripts/install.sh" >> /root/chroot_script.sh
+    echo -e "\033[0;32m\n[Installing i3WM]\033[0m"
+    echo "su - $USERNAME -c '{
+        git clone --depth 1 https://github.com/tryprncp/i3WM
+        ./i3WM/Scripts/install.sh
+    }'" >>/mnt/root/chroot_script.sh
 fi
 
-# Execute the script using arch-chroot and remove it afterwards
+echo -e "\033[0;32m\n[Entering arch-chroot environment]\033[0m"
 arch-chroot /mnt /bin/bash /root/chroot_script.sh
+echo -e "\033[0;32m\n[Exiting arch-chroot environment]\033[0m"
+echo -e "\033[0;32m\n[Removing chroot script]\033[0m"
 rm /mnt/root/chroot_script.sh
 
-# Unmount filesystem
+echo -e "\033[0;32m\n[Unmounting the root partition]\033[0m"
 umount -l /mnt
 
 # Execute shutdown if everything is successful
 if [ $? -eq 0 ]; then
+    echo -e "\033[0;32m\n[I use Arch, btw]\033[0m"
     shutdown now
 else
     exit 2
