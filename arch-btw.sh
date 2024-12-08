@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
 
-script installation.log
 set -e
 
 # Set hostname
@@ -79,7 +78,7 @@ echo -e "\033[0;32m\n[Generating filesystem table]\033[0m"
 genfstab -U /mnt > /mnt/etc/fstab
 
 echo -e "\033[0;32m\n[Creating a chroot script]\033[0m"
-cat << MEOW > chroot_script.sh
+cat << MEOW > /mnt/root/chroot_script.sh
 set -e
 
 echo -e "\033[0;32m\n[Installing essential packages]\033[0m"
@@ -117,7 +116,7 @@ echo -e "\033[0;32m\n[Configuring system to unlock the partition with a keyfile]
 mkdir /secure
 dd if=/dev/random of=/secure/root_keyfile.bin bs=512 count=2
 cryptsetup luksAddKey /dev/${PART}3 /secure/root_keyfile.bin
-sed -i '/^HOOKS=/ s/block /block encrypt lvm2 /' /etc/mkinitcpio.conf
+sed -i '/^HOOKS=/ s/block/block encrypt lvm2/' /etc/mkinitcpio.conf
 sed -i '/^FILES=/ s/()/(\/secure\/root_keyfile.bin)/' /etc/mkinitcpio.conf
 
 echo -e "\033[0;32m\n[Setting up root and user credentials]\033[0m"
@@ -136,9 +135,7 @@ echo -e "\033[0;32m\n[Entering arch-chroot environment]\033[0m"
 arch-chroot /mnt /bin/bash /root/chroot_script.sh
 
 echo -e "\033[0;32m\n[Cleaning up]\033[0m"
-cp installation.log /mnt/root/installation.log
 rm /mnt/root/chroot_script.sh
-exit
 
 echo -e "\033[0;32m\n[Unmounting the filesystems]\033[0m"
 swapoff -a
